@@ -282,7 +282,8 @@ const LoginPage = ({onLogin}) => {
             setRegOk(true);
             setTimeout(()=>onLogin(loginData),2000);
           }else{
-            setRegErr("Organisation déjà liée à ce compte. Connectez-vous normalement.");
+            setRegErr("Compte déjà créé ! Connectez-vous avec vos identifiants.");
+          setTimeout(()=>setView("login"),2000);
           }
           setRegLoad(false);return;
         }
@@ -291,8 +292,13 @@ const LoginPage = ({onLogin}) => {
       }
       // userId et token déjà définis ci-dessus
 
-      // 2. Attendre un peu que le profil soit créé par le trigger
-      await new Promise(r=>setTimeout(r,1500));
+      // 2. Attendre que le trigger crée le profil (jusqu'à 5 tentatives)
+      let profilCree = false;
+      for(let i=0; i<5; i++){
+        await new Promise(r=>setTimeout(r,1500));
+        const checkProfil = await sbFetch(`/rest/v1/profils?id=eq.${userId}&select=id`, {}, token);
+        if(Array.isArray(checkProfil) && checkProfil.length > 0){ profilCree = true; break; }
+      }
 
       // 3. Créer l'organisation
       const orgRes=await sbFetch("/rest/v1/organisations",{method:"POST",body:JSON.stringify({nom:reg.nomOrg,type:reg.typeOrg,ville:reg.ville,pays:reg.pays,secteur:reg.secteur||null,ifu:reg.ifu||null,rccm:reg.rccm||null,logo_url:reg.logoUrl||null,plan_abonnement:reg.plan,statut_abonnement:"essai",date_debut_abonnement:new Date().toISOString().split("T")[0],date_fin_abonnement:new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0]})},token);
@@ -302,12 +308,17 @@ const LoginPage = ({onLogin}) => {
       // 4. Mettre à jour le profil avec l'organisation
       await sbFetch(`/rest/v1/profils?id=eq.${userId}`,{method:"PATCH",body:JSON.stringify({nom:reg.nom,role:"directeur",organisation_id:org.id,departement:"Direction",poste:"Directeur Général",actif:true})},token);
 
-      // 5. Connexion automatique
+      // 5. Attendre que le patch soit appliqué puis connexion
+      await new Promise(r=>setTimeout(r,1500));
       setRegOk(true);
-      setTimeout(async()=>{
-        const loginRes=await authAPI.signIn(reg.email,reg.password);
-        if(loginRes?.access_token){onLogin(loginRes);}else{setRegOk(false);setRegErr("Compte créé avec succès ! Connectez-vous maintenant.");setView("login");}
-      },2000);
+      const loginRes=await authAPI.signIn(reg.email,reg.password);
+      if(loginRes?.access_token){
+        setTimeout(()=>onLogin(loginRes),1500);
+      }else{
+        setRegOk(false);
+        setRegErr("Compte créé ! Connectez-vous avec vos identifiants.");
+        setTimeout(()=>setView("login"),2000);
+      }
 
     }catch(e){setRegErr("Erreur de connexion. Réessayez.");}
     setRegLoad(false);

@@ -228,99 +228,112 @@ const LoginPage = ({onLogin}) => {
   };
 
   const doRegister=async()=>{
-    // Validation
     if(!reg.nomOrg||!reg.nom||!reg.email||!reg.password){setRegErr("Tous les champs obligatoires (*) doivent être remplis.");return;}
     if(reg.password!==reg.confirmPwd){setRegErr("Les mots de passe ne correspondent pas.");return;}
     if(reg.password.length<6){setRegErr("Le mot de passe doit contenir au moins 6 caractères.");return;}
     setRegLoad(true);setRegErr("");
     try{
-      // 1. Créer le compte utilisateur
-      // Créer compte avec fetch direct
+      // ÉTAPE 1: Créer le compte Auth
       const signupRes=await fetch(`${SUPABASE_URL}/auth/v1/signup`,{
         method:"POST",
         headers:{"Content-Type":"application/json","apikey":SUPABASE_ANON_KEY},
         body:JSON.stringify({email:reg.email,password:reg.password,data:{nom:reg.nom,role:"directeur"}})
       });
       const authRes=await signupRes.json();
-      console.log("Signup response:", JSON.stringify(authRes));
-      // Supabase renvoie user même si email existe (comportement normal)
-      // On vérifie juste qu'on a un user ID
+      
+      // Gérer les erreurs Auth
       if(authRes?.error){
-        const errMsg=authRes?.error?.message||authRes?.msg||"";
-        if(errMsg.toLowerCase().includes("weak")||errMsg.toLowerCase().includes("password")){
-          setRegErr("Mot de passe trop faible. Utilisez au moins 6 caractères.");
-        }else if(errMsg.toLowerCase().includes("already")||errMsg.toLowerCase().includes("existe")){
-          setRegErr("Cet email est déjà utilisé. Connectez-vous ou utilisez un autre email.");
-        }else if(errMsg.toLowerCase().includes("invalid")){
-          setRegErr("Adresse email invalide.");
-        }else{
-          setRegErr(errMsg||"Erreur de création. Réessayez.");
-        }
-        setRegLoad(false);return;
-      }
-      // Supabase peut renvoyer session sans user en mode no-confirmation
-      const userId=authRes?.user?.id||authRes?.session?.user?.id;
-      const token=authRes?.access_token||authRes?.session?.access_token||SUPABASE_ANON_KEY;
-      if(!userId){
-        // Essayer de se connecter directement - compte peut être créé
-        const loginCheck=await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`,{
-          method:"POST",
-          headers:{"Content-Type":"application/json","apikey":SUPABASE_ANON_KEY},
-          body:JSON.stringify({email:reg.email,password:reg.password})
-        });
-        const loginData=await loginCheck.json();
-        if(loginData?.access_token){
-          // Compte existait déjà, on continue avec ce token
-          const existingUserId=loginData?.user?.id;
-          const existingToken=loginData?.access_token;
-          // Continuer le flux avec ces credentials
-          const orgRes2=await sbFetch("/rest/v1/organisations",{method:"POST",body:JSON.stringify({nom:reg.nomOrg,type:reg.typeOrg,ville:reg.ville,pays:reg.pays,secteur:reg.secteur||null,ifu:reg.ifu||null,rccm:reg.rccm||null,logo_url:reg.logoUrl||null,plan_abonnement:reg.plan,statut_abonnement:"essai",date_debut_abonnement:new Date().toISOString().split("T")[0],date_fin_abonnement:new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0]})},existingToken);
-          const org2=Array.isArray(orgRes2)?orgRes2[0]:orgRes2;
-          if(org2?.id){
-            await new Promise(r=>setTimeout(r,1500));
-            await sbFetch(`/rest/v1/profils?id=eq.${existingUserId}`,{method:"PATCH",body:JSON.stringify({nom:reg.nom,role:"directeur",organisation_id:org2.id,departement:"Direction",poste:"Directeur Général",actif:true})},existingToken);
-            setRegOk(true);
-            setTimeout(()=>onLogin(loginData),2000);
+        const errMsg=authRes.error.message||"";
+        if(errMsg.toLowerCase().includes("already")){
+          // Compte existe — se connecter directement
+          const loginRes=await authAPI.signIn(reg.email,reg.password);
+          if(loginRes?.access_token){
+            // Vérifier si organisation existe déjà
+            const token=loginRes.access_token;
+            const uid=loginRes.user?.id;
+            const profil=await sbFetch(`/rest/v1/profils?id=eq.${uid}&select=*`,{},token);
+            const p=Array.isArray(profil)?profil[0]:null;
+            if(p?.organisation_id){
+              setRegLoad(false);
+              onLogin(loginRes);
+              return;
+            }
+            // Créer l'organisation pour ce compte existant
+            const orgRes=await sbFetch("/rest/v1/organisations",{method:"POST",body:JSON.stringify({
+              nom:reg.nomOrg,type:reg.typeOrg,ville:reg.ville,pays:reg.pays,
+              secteur:reg.secteur||null,ifu:reg.ifu||null,rccm:reg.rccm||null,
+              plan_abonnement:reg.plan,statut_abonnement:"essai",
+              date_debut_abonnement:new Date().toISOString().split("T")[0],
+              date_fin_abonnement:new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0]
+            })},token);
+            const org=Array.isArray(orgRes)?orgRes[0]:orgRes;
+            if(org?.id){
+              await sbFetch(`/rest/v1/profils?id=eq.${uid}`,{method:"PATCH",body:JSON.stringify({
+                nom:reg.nom,role:"directeur",organisation_id:org.id,
+                departement:"Direction",poste:"Directeur Général",actif:true
+              })},token);
+              setRegOk(true);
+              await new Promise(r=>setTimeout(r,1000));
+              onLogin(loginRes);
+            }
           }else{
-            setRegErr("Compte déjà créé ! Connectez-vous avec vos identifiants.");
-          setTimeout(()=>setView("login"),2000);
+            setRegErr("Email déjà utilisé. Connectez-vous ou utilisez un autre email.");
           }
           setRegLoad(false);return;
         }
-        setRegErr("Impossible de créer le compte. Vérifiez votre email et mot de passe.");
+        setRegErr(errMsg||"Erreur de création. Réessayez.");
         setRegLoad(false);return;
       }
-      // userId et token déjà définis ci-dessus
 
-      // 2. Attendre que le trigger crée le profil (jusqu'à 5 tentatives)
-      let profilCree = false;
-      for(let i=0; i<5; i++){
-        await new Promise(r=>setTimeout(r,1500));
-        const checkProfil = await sbFetch(`/rest/v1/profils?id=eq.${userId}&select=id`, {}, token);
-        if(Array.isArray(checkProfil) && checkProfil.length > 0){ profilCree = true; break; }
+      const userId=authRes?.user?.id||authRes?.session?.user?.id;
+      const token=authRes?.access_token||authRes?.session?.access_token||SUPABASE_ANON_KEY;
+      
+      if(!userId){setRegErr("Erreur inattendue. Réessayez.");setRegLoad(false);return;}
+
+      // ÉTAPE 2: Attendre le trigger (max 8 secondes)
+      for(let i=0;i<8;i++){
+        await new Promise(r=>setTimeout(r,1000));
+        const check=await sbFetch(`/rest/v1/profils?id=eq.${userId}&select=id`,{},token);
+        if(Array.isArray(check)&&check.length>0) break;
       }
 
-      // 3. Créer l'organisation
-      const orgRes=await sbFetch("/rest/v1/organisations",{method:"POST",body:JSON.stringify({nom:reg.nomOrg,type:reg.typeOrg,ville:reg.ville,pays:reg.pays,secteur:reg.secteur||null,ifu:reg.ifu||null,rccm:reg.rccm||null,logo_url:reg.logoUrl||null,plan_abonnement:reg.plan,statut_abonnement:"essai",date_debut_abonnement:new Date().toISOString().split("T")[0],date_fin_abonnement:new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0]})},token);
+      // ÉTAPE 3: Créer l'organisation
+      const orgRes=await sbFetch("/rest/v1/organisations",{method:"POST",body:JSON.stringify({
+        nom:reg.nomOrg,type:reg.typeOrg,ville:reg.ville,pays:reg.pays,
+        secteur:reg.secteur||null,ifu:reg.ifu||null,rccm:reg.rccm||null,
+        logo_url:reg.logoUrl||null,plan_abonnement:reg.plan,statut_abonnement:"essai",
+        date_debut_abonnement:new Date().toISOString().split("T")[0],
+        date_fin_abonnement:new Date(Date.now()+30*24*60*60*1000).toISOString().split("T")[0]
+      })},token);
       const org=Array.isArray(orgRes)?orgRes[0]:orgRes;
-      if(!org?.id){setRegErr("Erreur lors de la création de l'organisation. Réessayez.");setRegLoad(false);return;}
+      
+      if(!org?.id){
+        // Organisation non créée - vérifier RLS
+        setRegErr("Erreur création organisation. Vérifiez la connexion et réessayez.");
+        setRegLoad(false);return;
+      }
 
-      // 4. Mettre à jour le profil avec l'organisation
-      await sbFetch(`/rest/v1/profils?id=eq.${userId}`,{method:"PATCH",body:JSON.stringify({nom:reg.nom,role:"directeur",organisation_id:org.id,departement:"Direction",poste:"Directeur Général",actif:true})},token);
+      // ÉTAPE 4: Lier profil à l'organisation
+      await sbFetch(`/rest/v1/profils?id=eq.${userId}`,{method:"PATCH",body:JSON.stringify({
+        nom:reg.nom,role:"directeur",organisation_id:org.id,
+        departement:"Direction",poste:"Directeur Général",actif:true
+      })},token);
 
-      // 5. Attendre que le patch soit appliqué puis connexion
-      await new Promise(r=>setTimeout(r,1500));
+      // ÉTAPE 5: Connexion automatique
+      await new Promise(r=>setTimeout(r,1000));
       setRegOk(true);
       const loginRes=await authAPI.signIn(reg.email,reg.password);
       if(loginRes?.access_token){
-        setTimeout(()=>onLogin(loginRes),1500);
+        await new Promise(r=>setTimeout(r,500));
+        onLogin(loginRes);
       }else{
-        setRegOk(false);
         setRegErr("Compte créé ! Connectez-vous avec vos identifiants.");
-        setTimeout(()=>setView("login"),2000);
+        setTimeout(()=>{setRegOk(false);setView("login");},2000);
       }
-
-    }catch(e){setRegErr("Erreur de connexion. Réessayez.");}
+    }catch(e){
+      console.error("Inscription erreur:",e);
+      setRegErr("Erreur de connexion. Vérifiez votre internet et réessayez.");
+    }
     setRegLoad(false);
   };
 

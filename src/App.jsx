@@ -27,6 +27,22 @@ const dbAPI = {
   del: (table,filter,token) => sbFetch(`/rest/v1/${table}?${filter}`,{method:'DELETE'},token),
 };
 
+// Fonctions CRUD Supabase avec sync local
+const saveToDb = async (table, data, token, orgId) => {
+  const body = {...data, organisation_id: orgId};
+  const res = await sbFetch(`/rest/v1/${table}`, {method:'POST', body:JSON.stringify(body)}, token);
+  return Array.isArray(res) ? res[0] : res;
+};
+
+const updateInDb = async (table, id, data, token) => {
+  const res = await sbFetch(`/rest/v1/${table}?id=eq.${id}`, {method:'PATCH', body:JSON.stringify(data)}, token);
+  return res;
+};
+
+const deleteFromDb = async (table, id, token) => {
+  await sbFetch(`/rest/v1/${table}?id=eq.${id}`, {method:'DELETE'}, token);
+};
+
 const storageUpload = async (path, file, token) => {
   const r = await fetch(`${SUPABASE_URL}/storage/v1/object/documents/${path}`,{method:'POST',headers:{'Authorization':`Bearer ${token}`,'apikey':SUPABASE_ANON_KEY,'Content-Type':file.type},body:file});
   if(r.ok){
@@ -509,10 +525,30 @@ const Taches = ({data,setData,currentUser}) => {
   const gu=id=>data.users.find(u=>u.id===id);
   useEffect(()=>{setData(d=>({...d,taches:d.taches.map(t=>isRetard(t.deadline,t.statut)&&t.statut!=="en_retard"?{...t,statut:"en_retard"}:t)}));},[]);
   const val=f=>{const e={};if(!f.titre)e.titre=true;if(!f.assigneA)e.assigneA=true;if(!f.deadline)e.deadline=true;setErrs(e);return!Object.keys(e).length;};
-  const add=()=>{if(!val(form))return;setData(d=>({...d,taches:[...d.taches,{id:Date.now(),...form,assigneA:form.assigneA,assignePar:currentUser.id,statut:"a_faire"}]}));toast("Tâche créée");setModal(false);setForm(ef);setErrs({});};
-  const upd=()=>{if(!val(editM))return;setData(d=>({...d,taches:d.taches.map(t=>t.id===editM.id?{...editM,assigneA:editM.assigneA}:t)}));toast("Tâche modifiée");setEditM(null);};
-  const chgStat=(id,s)=>{setData(d=>({...d,taches:d.taches.map(t=>t.id===id?{...t,statut:s}:t)}));toast("Statut mis à jour");};
-  const del=id=>{setData(d=>({...d,taches:d.taches.filter(t=>t.id!==id)}));toast("Tâche supprimée","info");setConf(null);};
+  const add=async()=>{
+    if(!val(form))return;
+    const newT={...form,assigneA:form.assigneA,assignePar:currentUser.id,statut:"a_faire",organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("taches",newT,currentUser.token,currentUser.organisationId);
+    const t={...newT,id:saved?.id||Date.now()};
+    setData(d=>({...d,taches:[...d.taches,t]}));
+    toast("Tâche créée");setModal(false);setForm(ef);setErrs({});
+  };
+  const upd=async()=>{
+    if(!val(editM))return;
+    await updateInDb("taches",editM.id,{...editM,assigneA:editM.assigneA},currentUser.token);
+    setData(d=>({...d,taches:d.taches.map(t=>t.id===editM.id?{...editM}:t)}));
+    toast("Tâche modifiée");setEditM(null);
+  };
+  const chgStat=async(id,s)=>{
+    await updateInDb("taches",id,{statut:s},currentUser.token);
+    setData(d=>({...d,taches:d.taches.map(t=>t.id===id?{...t,statut:s}:t)}));
+    toast("Statut mis à jour");
+  };
+  const del=async(id)=>{
+    await deleteFromDb("taches",id,currentUser.token);
+    setData(d=>({...d,taches:d.taches.filter(t=>t.id!==id)}));
+    toast("Tâche supprimée","info");setConf(null);
+  };
   const list=data.taches.filter(t=>filtre==="tous"||t.statut===filtre).filter(t=>!search||t.titre.toLowerCase().includes(search.toLowerCase())).filter(t=>canM||t.assigneA===currentUser.id);
   const TF=({f,setF,e})=>(
     <>
@@ -565,14 +601,34 @@ const Reunions = ({data,setData,currentUser}) => {
   const [cr,setCr]=useState({texte:"",decisions:""}),[gt,setGt]=useState([]);
   const canM=currentUser.role!=="agent";
   const gu=id=>data.users.find(u=>u.id===id);
-  const creer=()=>{if(!form.titre||!form.date)return;setData(d=>({...d,reunions:[...d.reunions,{id:Date.now(),...form,participants:form.participants.map(Number),statut:"planifiee",cr:"",decisions:[],tachesGenerees:[]}]}));toast("Réunion planifiée");setModal(false);setForm({titre:"",date:"",heure:"",lieu:"",participants:[]});};
-  const saveCR=()=>{
+  const creer=async()=>{
+    if(!form.titre||!form.date)return;
+    const newR={...form,participants:form.participants,statut:"planifiee",cr:"",decisions:[],organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("reunions",newR,currentUser.token,currentUser.organisationId);
+    const r={...newR,id:saved?.id||Date.now()};
+    setData(d=>({...d,reunions:[...d.reunions,r]}));
+    toast("Réunion planifiée");setModal(false);setForm({titre:"",date:"",heure:"",lieu:"",participants:[]});
+  };
+  const saveCR=async()=>{
     const dec=cr.decisions.split("\n").filter(Boolean);
+    await updateInDb("reunions",crM.id,{compte_rendu:cr.texte,decisions:dec,statut:"tenue"},currentUser.token);
     setData(d=>({...d,reunions:d.reunions.map(r=>r.id===crM.id?{...r,cr:cr.texte,decisions:dec,statut:"tenue"}:r)}));
-    if(gt.length>0){const nv=gt.filter(t=>t.titre).map(t=>({id:Date.now()+Math.random(),titre:t.titre,assigneA:parseInt(t.assigneA)||null,assignePar:currentUser.id,deadline:t.deadline||"",statut:"a_faire",priorite:"normale",dept:"",description:`Généré depuis : ${crM.titre}`}));if(nv.length>0){setData(d=>({...d,taches:[...d.taches,...nv]}));toast(`${nv.length} tâche(s) générée(s)`);}}
+    if(gt.length>0){
+      const nv=gt.filter(t=>t.titre);
+      for(const t of nv){
+        const newT={titre:t.titre,assigneA:t.assigneA||null,assignePar:currentUser.id,deadline:t.deadline||"",statut:"a_faire",priorite:"normale",dept:"",description:`Généré depuis : ${crM.titre}`,organisation_id:currentUser.organisationId};
+        const saved=await saveToDb("taches",newT,currentUser.token,currentUser.organisationId);
+        setData(d=>({...d,taches:[...d.taches,{...newT,id:saved?.id||Date.now()}]}));
+      }
+      if(nv.length>0)toast(`${nv.length} tâche(s) générée(s)`);
+    }
     toast("CR enregistré");setCrM(null);setGt([]);
   };
-  const del=id=>{setData(d=>({...d,reunions:d.reunions.filter(r=>r.id!==id)}));toast("Réunion supprimée","info");setConf(null);};
+  const del=async(id)=>{
+    await deleteFromDb("reunions",id,currentUser.token);
+    setData(d=>({...d,reunions:d.reunions.filter(r=>r.id!==id)}));
+    toast("Réunion supprimée","info");setConf(null);
+  };
   const openCR=r=>{setCrM(r);setCr({texte:r.cr||"",decisions:(r.decisions||[]).join("\n")});setGt([]);};
   return(
     <div className="fade-in">
@@ -666,31 +722,26 @@ const Annuaire = ({data,setData,currentUser}) => {
   const invite=async()=>{
     if(!invF.email||!invF.nom)return;setInvS("envoi");
     try{
-      // Générer mot de passe temporaire fort
       const tmpPwd=Math.random().toString(36).slice(-8).toUpperCase()+"@"+Math.floor(Math.random()*9000+1000);
-      // Créer le compte collaborateur
       const invRes=await fetch(`${SUPABASE_URL}/auth/v1/signup`,{
         method:"POST",
         headers:{"Content-Type":"application/json","apikey":SUPABASE_ANON_KEY},
         body:JSON.stringify({
-          email:invF.email,
-          password:tmpPwd,
+          email:invF.email,password:tmpPwd,
           data:{nom:invF.nom,role:invF.role||"agent",organisation_id:currentUser.organisationId}
         })
       });
       const r=await invRes.json();
-      // Stocker le mot de passe temporaire pour l'afficher
-      if(r?.user||r?.session||r?.id){
-        const uid=r?.user?.id||r?.session?.user?.id||r?.id;
-        await new Promise(res=>setTimeout(res,1500));
+      if(r?.user||r?.session){
+        const uid=r?.user?.id||r?.session?.user?.id;
+        await new Promise(res=>setTimeout(res,2000));
         if(uid){
-          await new Promise(res=>setTimeout(res,2000));
-          // Essayer PATCH d'abord, puis INSERT si échec
+          // PATCH d'abord
           const patchRes=await sbFetch(`/rest/v1/profils?id=eq.${uid}`,{method:"PATCH",body:JSON.stringify({
             nom:invF.nom,role:invF.role||"agent",poste:invF.poste||"",
             departement:invF.dept||"",organisation_id:currentUser.organisationId,actif:true
           })},currentUser.token);
-          // Si PATCH échoue (profil pas encore créé), faire INSERT
+          // INSERT si PATCH échoue
           if(!patchRes||patchRes?.length===0){
             await sbFetch(`/rest/v1/profils`,{method:"POST",body:JSON.stringify({
               id:uid,email:invF.email,nom:invF.nom,role:invF.role||"agent",
@@ -699,26 +750,24 @@ const Annuaire = ({data,setData,currentUser}) => {
             })},currentUser.token);
           }
         }
-        // Afficher le mot de passe temporaire
+        setData(d=>({...d,users:[...d.users,{id:uid||Date.now(),nom:invF.nom,role:invF.role||"agent",poste:invF.poste||"",email:invF.email,actif:true,departement:invF.dept||""}]}));
+        setInvs(p=>[...p,{id:Date.now(),...invF,statut:"en_attente",date:new Date().toISOString().split("T")[0]}]);
         setTmpPassword(tmpPwd);
-      setInvs(p=>[...p,{id:Date.now(),...invF,statut:"en_attente",date:new Date().toISOString().split("T")[0]}]);
-      setData(d=>({...d,users:[...d.users,{id:Date.now()+1,nom:invF.nom,role:invF.role,poste:invF.poste,dept:invF.dept,email:invF.email,tel:"",actif:false}]}));
-      setInvS("succes");setTimeout(()=>{setInvM(false);setInvS("");setInvF({email:"",nom:"",poste:"",role:"agent",dept:""});},2500);
-    }else{
-          const errMsg=r?.error?.message||r?.msg||"";
-          if(errMsg.includes("already")||errMsg.includes("existe")){
-            setInvS("erreur");
-            setInvErrMsg("Cet email est déjà enregistré dans le système.");
-          }else{
-            setInvS("erreur");
-            setInvErrMsg("Erreur lors de la création. Vérifiez l'email.");
-          }
-          setTimeout(()=>{setInvS("");setInvErrMsg("");},4000);
+        setInvS("succes");
+        setTimeout(()=>{setInvM(false);setInvS("");setInvF({email:"",nom:"",poste:"",role:"agent",dept:""});setTmpPassword("");},8000);
+      }else{
+        const errMsg=r?.error?.message||r?.msg||"";
+        if(errMsg.toLowerCase().includes("already")){
+          setInvErrMsg("Cet email est déjà enregistré.");
+        }else{
+          setInvErrMsg(errMsg||"Erreur. Vérifiez l'email.");
         }
+        setInvS("erreur");
+        setTimeout(()=>{setInvS("");setInvErrMsg("");},4000);
+      }
     }catch(e){
       console.error("Invitation erreur:",e);
-      setInvS("erreur");
-      setInvErrMsg("Erreur de connexion. Réessayez.");
+      setInvS("erreur");setInvErrMsg("Erreur de connexion.");
       setTimeout(()=>{setInvS("");setInvErrMsg("");},4000);
     }
   };
@@ -784,10 +833,16 @@ const Documents = ({data,setData,currentUser}) => {
     if(!form.nom){toast("Le nom est obligatoire","error");return;}
     setUpl(true);let url="#",taille=fich?`${(fich.size/1024/1024).toFixed(1)} MB`:"—";
     if(fich){const p=`${currentUser.organisationId||"demo"}/${Date.now()}_${fich.name}`;const u=await storageUpload(p,fich,currentUser.token);if(u)url=u;}
-    setData(d=>({...d,documents:[...d.documents,{id:Date.now(),...form,taille,date:new Date().toISOString().split("T")[0],uploadePar:currentUser.id,url}]}));
+    const newDoc={...form,taille,date:new Date().toISOString().split("T")[0],uploade_par:currentUser.id,url,organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("documents",newDoc,currentUser.token,currentUser.organisationId);
+    setData(d=>({...d,documents:[...d.documents,{...newDoc,id:saved?.id||Date.now(),uploadePar:currentUser.id}]}));
     toast("Document enregistré");setUpl(false);setModal(false);setFich(null);setForm({nom:"",type:"rapport",dept:""});
   };
-  const del=id=>{setData(d=>({...d,documents:d.documents.filter(x=>x.id!==id)}));toast("Document supprimé","info");setConf(null);};
+  const del=async(id)=>{
+    await deleteFromDb("documents",id,currentUser.token);
+    setData(d=>({...d,documents:d.documents.filter(x=>x.id!==id)}));
+    toast("Document supprimé","info");setConf(null);
+  };
   return(
     <div className="fade-in">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><div className="search-wrap"><span className="search-icon">🔍</span><input className="search-input" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Rechercher..."/></div><button className="btn btn-primary" onClick={()=>setModal(true)}>+ Ajouter document</button></div>
@@ -814,9 +869,22 @@ const Messagerie = ({data,setData,currentUser}) => {
   const gu=id=>data.users.find(u=>u.id===id);
   const mes=data.messages.filter(m=>m.a===currentUser.id||m.de===currentUser.id);
   const nlu=mes.filter(m=>!m.lu&&m.a===currentUser.id).length;
-  const send=()=>{if(!form.a||!form.sujet||!form.contenu){toast("Remplissez tous les champs","error");return;}setData(d=>({...d,messages:[{id:Date.now(),de:currentUser.id,a:form.a,sujet:form.sujet,contenu:form.contenu,date:new Date().toLocaleString("fr-FR"),lu:false},...d.messages]}));toast("Message envoyé");setModal(false);setForm({a:"",sujet:"",contenu:""});};
-  const del=id=>{setData(d=>({...d,messages:d.messages.filter(m=>m.id!==id)}));if(sel?.id===id)setSel(null);toast("Message supprimé","info");setConf(null);};
-  const lu=id=>setData(d=>({...d,messages:d.messages.map(m=>m.id===id?{...m,lu:true}:m)}));
+  const send=async()=>{
+    if(!form.a||!form.sujet||!form.contenu){toast("Remplissez tous les champs","error");return;}
+    const newMsg={de:currentUser.id,a:form.a,sujet:form.sujet,contenu:form.contenu,date:new Date().toLocaleString("fr-FR"),lu:false,organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("messages",newMsg,currentUser.token,currentUser.organisationId);
+    setData(d=>({...d,messages:[{...newMsg,id:saved?.id||Date.now()},...d.messages]}));
+    toast("Message envoyé");setModal(false);setForm({a:"",sujet:"",contenu:""});
+  };
+  const del=async(id)=>{
+    await deleteFromDb("messages",id,currentUser.token);
+    setData(d=>({...d,messages:d.messages.filter(m=>m.id!==id)}));
+    if(sel?.id===id)setSel(null);toast("Message supprimé","info");setConf(null);
+  };
+  const lu=async(id)=>{
+    await updateInDb("messages",id,{lu:true},currentUser.token);
+    setData(d=>({...d,messages:d.messages.map(m=>m.id===id?{...m,lu:true}:m)}));
+  };
   return(
     <div className="fade-in">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><div style={{fontSize:13,color:"var(--text2)"}}>{nlu>0&&<span style={{color:"var(--accent)",fontWeight:600}}>{nlu} non lu(s) · </span>}{mes.length} message(s)</div><button className="btn btn-primary" onClick={()=>setModal(true)}>✍️ Nouveau message</button></div>
@@ -845,9 +913,23 @@ const Budget = ({data,setData,currentUser}) => {
   const tot=data.budgets.reduce((s,b)=>s+b.montantTotal,0);
   const dep=data.budgets.reduce((s,b)=>s+b.depense,0);
   const taux=tot>0?Math.round(dep/tot*100):0;
-  const add=()=>{if(!form.projet||!form.montantTotal){toast("Remplissez les champs obligatoires","error");return;}setData(d=>({...d,budgets:[...d.budgets,{id:Date.now(),...form,montantTotal:parseInt(form.montantTotal),depense:parseInt(form.depense||0),annee:parseInt(form.annee)}]}));toast("Budget créé");setModal(false);setForm(ef);};
-  const upd=()=>{setData(d=>({...d,budgets:d.budgets.map(b=>b.id===editM.id?{...editM,montantTotal:parseInt(editM.montantTotal),depense:parseInt(editM.depense||0)}:b)}));toast("Budget mis à jour");setEditM(null);};
-  const del=id=>{setData(d=>({...d,budgets:d.budgets.filter(b=>b.id!==id)}));toast("Budget supprimé","info");setConf(null);};
+  const add=async()=>{
+    if(!form.projet||!form.montantTotal){toast("Remplissez les champs obligatoires","error");return;}
+    const newB={...form,montant_total:parseInt(form.montantTotal),montant_depense:parseInt(form.depense||0),annee:parseInt(form.annee),organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("budgets",newB,currentUser.token,currentUser.organisationId);
+    setData(d=>({...d,budgets:[...d.budgets,{...newB,id:saved?.id||Date.now(),montantTotal:parseInt(form.montantTotal),depense:parseInt(form.depense||0)}]}));
+    toast("Budget créé");setModal(false);setForm(ef);
+  };
+  const upd=async()=>{
+    await updateInDb("budgets",editM.id,{projet:editM.projet,montant_total:parseInt(editM.montantTotal),montant_depense:parseInt(editM.depense||0),bailleurs:editM.bailleurs,dept:editM.dept},currentUser.token);
+    setData(d=>({...d,budgets:d.budgets.map(b=>b.id===editM.id?{...editM,montantTotal:parseInt(editM.montantTotal),depense:parseInt(editM.depense||0)}:b)}));
+    toast("Budget mis à jour");setEditM(null);
+  };
+  const del=async(id)=>{
+    await deleteFromDb("budgets",id,currentUser.token);
+    setData(d=>({...d,budgets:d.budgets.filter(b=>b.id!==id)}));
+    toast("Budget supprimé","info");setConf(null);
+  };
   const BF=({f,setF})=>(
     <>
       <div className="form-group"><label className="form-label">Intitulé *</label><input className="form-input" value={f.projet} onChange={e=>setF({...f,projet:e.target.value})} placeholder="Nom du projet"/></div>

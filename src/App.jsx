@@ -527,15 +527,24 @@ const Taches = ({data,setData,currentUser}) => {
   const val=f=>{const e={};if(!f.titre)e.titre=true;if(!f.assigneA)e.assigneA=true;if(!f.deadline)e.deadline=true;setErrs(e);return!Object.keys(e).length;};
   const add=async()=>{
     if(!val(form))return;
-    const newT={...form,assigneA:form.assigneA,assignePar:currentUser.id,statut:"a_faire",organisation_id:currentUser.organisationId};
-    const saved=await saveToDb("taches",newT,currentUser.token,currentUser.organisationId);
-    const t={...newT,id:saved?.id||Date.now()};
+    const payload={
+      titre:form.titre,description:form.description||null,
+      assigne_a:form.assigneA,assigne_par:currentUser.id,
+      deadline:form.deadline,statut:"a_faire",priorite:form.priorite||"normale",
+      departement:form.dept||null,organisation_id:currentUser.organisationId
+    };
+    const saved=await saveToDb("taches",payload,currentUser.token,currentUser.organisationId);
+    const t={...form,id:saved?.id||Date.now(),assigneA:form.assigneA,assignePar:currentUser.id,statut:"a_faire"};
     setData(d=>({...d,taches:[...d.taches,t]}));
     toast("Tâche créée");setModal(false);setForm(ef);setErrs({});
   };
   const upd=async()=>{
     if(!val(editM))return;
-    await updateInDb("taches",editM.id,{...editM,assigneA:editM.assigneA},currentUser.token);
+    await updateInDb("taches",editM.id,{
+      titre:editM.titre,description:editM.description||null,
+      assigne_a:editM.assigneA,deadline:editM.deadline,
+      priorite:editM.priorite||"normale",departement:editM.dept||null
+    },currentUser.token);
     setData(d=>({...d,taches:d.taches.map(t=>t.id===editM.id?{...editM}:t)}));
     toast("Tâche modifiée");setEditM(null);
   };
@@ -603,9 +612,12 @@ const Reunions = ({data,setData,currentUser}) => {
   const gu=id=>data.users.find(u=>u.id===id);
   const creer=async()=>{
     if(!form.titre||!form.date)return;
-    const newR={...form,participants:form.participants,statut:"planifiee",cr:"",decisions:[],organisation_id:currentUser.organisationId};
-    const saved=await saveToDb("reunions",newR,currentUser.token,currentUser.organisationId);
-    const r={...newR,id:saved?.id||Date.now()};
+    const payload={
+      titre:form.titre,date:form.date,heure:form.heure||null,lieu:form.lieu||null,
+      statut:"planifiee",organisation_id:currentUser.organisationId,cree_par:currentUser.id
+    };
+    const saved=await saveToDb("reunions",payload,currentUser.token,currentUser.organisationId);
+    const r={...payload,id:saved?.id||Date.now(),participants:form.participants,cr:"",decisions:[]};
     setData(d=>({...d,reunions:[...d.reunions,r]}));
     toast("Réunion planifiée");setModal(false);setForm({titre:"",date:"",heure:"",lieu:"",participants:[]});
   };
@@ -616,9 +628,9 @@ const Reunions = ({data,setData,currentUser}) => {
     if(gt.length>0){
       const nv=gt.filter(t=>t.titre);
       for(const t of nv){
-        const newT={titre:t.titre,assigneA:t.assigneA||null,assignePar:currentUser.id,deadline:t.deadline||"",statut:"a_faire",priorite:"normale",dept:"",description:`Généré depuis : ${crM.titre}`,organisation_id:currentUser.organisationId};
-        const saved=await saveToDb("taches",newT,currentUser.token,currentUser.organisationId);
-        setData(d=>({...d,taches:[...d.taches,{...newT,id:saved?.id||Date.now()}]}));
+        const payload={titre:t.titre,assigne_a:t.assigneA||null,assigne_par:currentUser.id,deadline:t.deadline||null,statut:"a_faire",priorite:"normale",reunion_id:crM.id,description:`Généré depuis : ${crM.titre}`,organisation_id:currentUser.organisationId};
+        const saved=await saveToDb("taches",payload,currentUser.token,currentUser.organisationId);
+        setData(d=>({...d,taches:[...d.taches,{...payload,id:saved?.id||Date.now(),assigneA:t.assigneA,assignePar:currentUser.id}]}));
       }
       if(nv.length>0)toast(`${nv.length} tâche(s) générée(s)`);
     }
@@ -831,11 +843,11 @@ const Documents = ({data,setData,currentUser}) => {
   const setF=f=>{if(!f)return;setFich(f);if(!form.nom)setForm(p=>({...p,nom:f.name.replace(/\.[^/.]+$/,"")}));};
   const add=async()=>{
     if(!form.nom){toast("Le nom est obligatoire","error");return;}
-    setUpl(true);let url="#",taille=fich?`${(fich.size/1024/1024).toFixed(1)} MB`:"—";
-    if(fich){const p=`${currentUser.organisationId||"demo"}/${Date.now()}_${fich.name}`;const u=await storageUpload(p,fich,currentUser.token);if(u)url=u;}
-    const newDoc={...form,taille,date:new Date().toISOString().split("T")[0],uploade_par:currentUser.id,url,organisation_id:currentUser.organisationId};
-    const saved=await saveToDb("documents",newDoc,currentUser.token,currentUser.organisationId);
-    setData(d=>({...d,documents:[...d.documents,{...newDoc,id:saved?.id||Date.now(),uploadePar:currentUser.id}]}));
+    setUpl(true);let url="#",taille=fich?`${(fich.size/1024/1024).toFixed(1)} MB`:"—",storagePath=null;
+    if(fich){const p=`${currentUser.organisationId||"demo"}/${Date.now()}_${fich.name}`;const u=await storageUpload(p,fich,currentUser.token);if(u){url=u;storagePath=p;}}
+    const payload={nom:form.nom,type:form.type,departement:form.dept||null,taille,url,storage_path:storagePath,organisation_id:currentUser.organisationId};
+    const saved=await saveToDb("documents",payload,currentUser.token,currentUser.organisationId);
+    setData(d=>({...d,documents:[...d.documents,{...payload,id:saved?.id||Date.now(),dept:form.dept,date:new Date().toISOString().split("T")[0],uploadePar:currentUser.id}]}));
     toast("Document enregistré");setUpl(false);setModal(false);setFich(null);setForm({nom:"",type:"rapport",dept:""});
   };
   const del=async(id)=>{
@@ -915,13 +927,22 @@ const Budget = ({data,setData,currentUser}) => {
   const taux=tot>0?Math.round(dep/tot*100):0;
   const add=async()=>{
     if(!form.projet||!form.montantTotal){toast("Remplissez les champs obligatoires","error");return;}
-    const newB={...form,montant_total:parseInt(form.montantTotal),montant_depense:parseInt(form.depense||0),annee:parseInt(form.annee),organisation_id:currentUser.organisationId};
-    const saved=await saveToDb("budgets",newB,currentUser.token,currentUser.organisationId);
-    setData(d=>({...d,budgets:[...d.budgets,{...newB,id:saved?.id||Date.now(),montantTotal:parseInt(form.montantTotal),depense:parseInt(form.depense||0)}]}));
+    const payload={
+      projet:form.projet,montant_total:parseInt(form.montantTotal),
+      montant_depense:parseInt(form.depense||0),departement:form.dept||null,
+      bailleur:form.bailleurs||null,annee:parseInt(form.annee),
+      description:form.description||null,organisation_id:currentUser.organisationId
+    };
+    const saved=await saveToDb("budgets",payload,currentUser.token,currentUser.organisationId);
+    setData(d=>({...d,budgets:[...d.budgets,{...payload,id:saved?.id||Date.now(),montantTotal:payload.montant_total,depense:payload.montant_depense,dept:form.dept,bailleurs:form.bailleurs}]}));
     toast("Budget créé");setModal(false);setForm(ef);
   };
   const upd=async()=>{
-    await updateInDb("budgets",editM.id,{projet:editM.projet,montant_total:parseInt(editM.montantTotal),montant_depense:parseInt(editM.depense||0),bailleurs:editM.bailleurs,dept:editM.dept},currentUser.token);
+    await updateInDb("budgets",editM.id,{
+      projet:editM.projet,montant_total:parseInt(editM.montantTotal),
+      montant_depense:parseInt(editM.depense||0),bailleur:editM.bailleurs||null,
+      departement:editM.dept||null
+    },currentUser.token);
     setData(d=>({...d,budgets:d.budgets.map(b=>b.id===editM.id?{...editM,montantTotal:parseInt(editM.montantTotal),depense:parseInt(editM.depense||0)}:b)}));
     toast("Budget mis à jour");setEditM(null);
   };
